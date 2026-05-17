@@ -1,5 +1,5 @@
 pillow
 colorthief
 numpy
-moviepy
+moviepy==2.2.1
 streamlit
