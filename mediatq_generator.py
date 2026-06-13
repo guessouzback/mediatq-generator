@@ -58,6 +58,9 @@ check_deps()
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from moviepy import AudioFileClip
 
+# ── Dossier assets (chemin relatif au script) ────────────────────────────────
+ASSETS_DIR = Path(__file__).parent / "assets"
+
 # ── Configuration ────────────────────────────────────────────────────────────
 W, H = 1920, 1080          # Résolution finale
 FPS = 10                   # Images par seconde
@@ -212,33 +215,36 @@ def generate_preview(args):
         episode=args.episode,
         font_label=font_label, font_bold=font_bold, font_episode=font_episode,
         fade_in_frames=0, fade_out_frames=0, total_frames=300,
-    )
+    ).convert("RGB")
     # Motif sur l'aperçu
-    motif_path = r"C:\Users\adrie\Desktop\mediatq_\mdtq_youtube_motif.mp4"
+    motif_path = str(ASSETS_DIR / "mdtq_youtube_motif.mp4")
     try:
         from moviepy import VideoFileClip
         mc = VideoFileClip(motif_path)
-        motif_frame = Image.fromarray(mc.get_frame(0)).filter(ImageFilter.GaussianBlur(radius=5))
+        t_mid = mc.duration / 2
+        motif_frame = Image.fromarray(mc.get_frame(t_mid)).filter(ImageFilter.GaussianBlur(radius=5))
         mc.close()
-        mh, mw = motif_frame.height, motif_frame.width
-        y2, x2 = min(186 + mh, H), min(1100 + mw, W)
-        ch, cw = y2 - 186, x2 - 1100
-        # Cache luma : cover recadrée fill pour remplir les dims du motif
+        mw, mh = motif_frame.width, motif_frame.height
+        x2 = min(1100 + mw, W)
+        y2 = min(186  + mh, H)
+        cw = x2 - 1100
+        ch = y2 - 186
+        # Cache luma : cover recadrée aux dims du motif avec blur
         _c = cover_resized.convert("RGB")
         _scale = max(mw / _c.width, mh / _c.height)
         _tmp = _c.resize((int(_c.width * _scale), int(_c.height * _scale)), Image.LANCZOS)
-        _l = (_tmp.width - mw) // 2
+        _l = (_tmp.width  - mw) // 2
         _t = (_tmp.height - mh) // 2
         _cover_m = _tmp.crop((_l, _t, _l + mw, _t + mh)).filter(ImageFilter.GaussianBlur(radius=100))
-        luma = np.array(_cover_m, dtype=np.float32)[:ch, :cw] / 255.0  # (h, w, 3)
-        base_np = np.array(img).astype(np.float32) / 255.0
-        mf_np   = np.array(motif_frame).astype(np.float32)[:ch, :cw] / 255.0
+        luma  = np.array(_cover_m,    dtype=np.float32)[:ch, :cw] / 255.0
+        mf_np = np.array(motif_frame, dtype=np.float32)[:ch, :cw] / 255.0
+        base_np = np.array(img, dtype=np.float32) / 255.0
         base_np[186:y2, 1100:x2] = np.clip(base_np[186:y2, 1100:x2] + mf_np * luma, 0, 1)
         img = Image.fromarray((base_np * 255).astype(np.uint8))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[preview] motif error: {e}")
     # Noise soft light 25%
-    noise_path = r"C:\Users\adrie\Desktop\mediatq_\mdtq_youtube_noise.mp4"
+    noise_path = str(ASSETS_DIR / "mdtq_youtube_noise.mp4")
     try:
         from moviepy import VideoFileClip as _VFC
         nc = _VFC(noise_path)
@@ -313,7 +319,7 @@ def generate_video(args, progress_logger=None):
     # ── Chargement du noise ───────────────────────────────────────────────
     print("🎲 Chargement du noise...")
     from moviepy import VideoClip, VideoFileClip
-    noise_path = r"C:\Users\adrie\Desktop\mediatq_\mdtq_youtube_noise.mp4"
+    noise_path = str(ASSETS_DIR / "mdtq_youtube_noise.mp4")
     noise_clip  = VideoFileClip(noise_path)
     noise_dur   = noise_clip.duration
 
@@ -327,7 +333,7 @@ def generate_video(args, progress_logger=None):
 
     # ── Chargement du motif ───────────────────────────────────────────────
     print("🎨 Chargement du motif...")
-    motif_path = r"C:\Users\adrie\Desktop\mediatq_\mdtq_youtube_motif.mp4"
+    motif_path = str(ASSETS_DIR / "mdtq_youtube_motif.mp4")
     motif_clip = VideoFileClip(motif_path)
 
     MOTIF_X, MOTIF_Y = 1100, 186
@@ -365,8 +371,8 @@ def generate_video(args, progress_logger=None):
 
     # ── Chargement des logos ──────────────────────────────────────────────
     print("🎬 Chargement des logos...")
-    logo_start_clip = VideoFileClip(r"C:\Users\adrie\Desktop\mediatq_\mdtq_youtube_logo_start.mp4")
-    logo_end_clip   = VideoFileClip(r"C:\Users\adrie\Desktop\mediatq_\mdtq_youtube_logo_end.mp4")
+    logo_start_clip = VideoFileClip(str(ASSETS_DIR / "mdtq_youtube_logo_start.mp4"))
+    logo_end_clip   = VideoFileClip(str(ASSETS_DIR / "mdtq_youtube_logo_end.mp4"))
     logo_start_dur  = logo_start_clip.duration
     logo_end_dur    = logo_end_clip.duration
     logo_start_last = logo_start_clip.get_frame(logo_start_dur - 1e-4).astype(np.float32) / 255.0
@@ -460,88 +466,159 @@ def generate_video(args, progress_logger=None):
 def gui_mode():
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
-    FONT = ("Alte Haas Grotesk", 11)
-    BG = "#f4f4f4"
-    FG = "#111111"
-    ENTRY_BG = "#ffffff"
-    ENTRY_BORDER = "#cccccc"
-    BTN_BG = "#111111"
-    BTN_FG = "#ffffff"
-    BTN_ACTIVE = "#333333"
+    import json
+
+    BG           = "#fafafa"
+    FG           = "#0f0f0f"
+    LABEL_FG     = "#999999"
+    ENTRY_BG     = "#ffffff"
+    ENTRY_BORDER = "#e4e4e4"
+    PILL_BG      = "#f2f2f2"
+    PILL_BORDER  = "#dcdcdc"
+    PILL_HOV     = "#eaeaea"
+    PILL_DIS     = "#f8f8f8"
+    PREV_BG      = "#0d0d0d"
+    FONT         = ("Alte Haas Grotesk", 13)
+    FONT_LBL     = ("Alte Haas Grotesk", 11)
+    PAD          = 36
+    PREV_W, PREV_H = 720, 405
 
     root = tk.Tk()
     root.title("mediatq. Video Generator")
     root.configure(bg=BG)
-    root.resizable(False, False)
+    root.resizable(True, True)
 
-    def label(parent, text, col, row, colspan=1):
-        tk.Label(parent, text=text, font=FONT, bg=BG, fg=FG).grid(
-            row=row, column=col, sticky="w", padx=10, pady=6, columnspan=colspan)
+    # ── Pill button (Canvas-based) ────────────────────────────────────────────
+    def pill_button(parent, text, command, w=180, h=38):
+        r = h // 2
+        _on = [True]
+        cvs = tk.Canvas(parent, width=w, height=h, bg=BG,
+                        highlightthickness=0, cursor="hand2")
+        def _draw(fill):
+            cvs.delete("all")
+            # contour
+            for cx1, cy1, cx2, cy2, s in [(0,0,r*2,h,90), (w-r*2,0,w,h,270)]:
+                cvs.create_arc(cx1,cy1,cx2,cy2, start=s, extent=180,
+                               fill=PILL_BORDER, outline=PILL_BORDER)
+            cvs.create_rectangle(r, 0, w-r, h, fill=PILL_BORDER, outline=PILL_BORDER)
+            # remplissage (1px inset)
+            for cx1, cy1, cx2, cy2, s in [(1,1,r*2-1,h-1,90), (w-r*2+1,1,w-1,h-1,270)]:
+                cvs.create_arc(cx1,cy1,cx2,cy2, start=s, extent=180,
+                               fill=fill, outline=fill)
+            cvs.create_rectangle(r, 1, w-r, h-1, fill=fill, outline=fill)
+            cvs.create_text(w//2, h//2, text=text, font=FONT_LBL, fill=FG)
+        _draw(PILL_BG)
+        cvs.bind("<Button-1>", lambda e: command() if _on[0] else None)
+        cvs.bind("<Enter>",    lambda e: _draw(PILL_HOV) if _on[0] else None)
+        cvs.bind("<Leave>",    lambda e: _draw(PILL_BG if _on[0] else PILL_DIS))
+        def set_state(s):
+            _on[0] = (s == "normal")
+            _draw(PILL_BG if _on[0] else PILL_DIS)
+            cvs.configure(cursor="hand2" if _on[0] else "")
+        cvs.set_state = set_state
+        return cvs
 
-    def entry(parent, var, col, row, width=50, bold=False):
-        f = ("Alte Haas Grotesk", 11, "bold") if bold else FONT
-        tk.Entry(parent, textvariable=var, font=f, bg=ENTRY_BG, fg=FG,
-                 insertbackground=FG, relief="flat", width=width,
-                 highlightbackground=ENTRY_BORDER, highlightthickness=1).grid(
-            row=row, column=col, padx=10, pady=6, sticky="ew")
-
-    def browse_btn(parent, var, col, row, filetypes):
-        def pick():
-            path = filedialog.askopenfilename(filetypes=filetypes)
-            if path:
-                var.set(path)
-        tk.Button(parent, text="Parcourir", font=FONT, bg=BTN_BG, fg=BTN_FG,
-                  activebackground=BTN_ACTIVE, activeforeground=BTN_FG, relief="flat",
-                  command=pick).grid(row=row, column=col, padx=(0, 10), pady=6)
-
-
-    # ── Titre ─────────────────────────────────────────────────────────────────
-    tk.Label(root, text="mediatq.  ■  Video Generator", font=("Alte Haas Grotesk", 16, "bold"),
-             bg=BG, fg=FG).grid(row=0, column=0, columnspan=2, pady=(18, 10))
-
-    frame = tk.Frame(root, bg=BG)
-    frame.grid(row=1, column=0, padx=20, pady=5, sticky="n")
-
-    # ── Aperçu intégré ────────────────────────────────────────────────────────
-    PREV_W, PREV_H = 480, 270
-    preview_frame = tk.Frame(root, bg=ENTRY_BORDER, width=PREV_W, height=PREV_H)
-    preview_frame.grid(row=1, column=1, padx=(0, 20), pady=5, sticky="n")
-    preview_frame.grid_propagate(False)
-    preview_label = tk.Label(preview_frame, bg=ENTRY_BORDER)
-    preview_label.place(x=0, y=0, width=PREV_W, height=PREV_H)
-
-    import json
+    # ── Session ───────────────────────────────────────────────────────────────
     _SESSION_FILE = Path(__file__).parent / "last_session.json"
     def load_session():
         if _SESSION_FILE.exists():
-            try:
-                return json.loads(_SESSION_FILE.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            try: return json.loads(_SESSION_FILE.read_text(encoding="utf-8"))
+            except Exception: pass
         return {}
     def save_session(data):
-        try:
-            _SESSION_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        try: _SESSION_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception: pass
 
     _s = load_session()
-    v_cover    = tk.StringVar(value=_s.get("cover", "C:/Users/adrie/Desktop/mediatq_/137. Blurry Apple - Apple.jpeg"))
-    v_audio    = tk.StringVar(value=_s.get("audio", ""))
-    v_artist   = tk.StringVar(value=_s.get("artist", "Artist Name"))
-    v_track    = tk.StringVar(value=_s.get("track", "Track Title"))
-    v_label    = tk.StringVar(value=_s.get("label", "Label Name"))
-    v_released = tk.StringVar(value=_s.get("released", "2024"))
-    v_episode  = tk.StringVar(value=str(_s.get("episode", "124")))
-    v_ep_type  = tk.StringVar(value=_s.get("ep_type", "ep"))
+    v_cover    = tk.StringVar(value=_s.get("cover",    ""))
+    v_audio    = tk.StringVar(value=_s.get("audio",    ""))
+    v_artist   = tk.StringVar(value=_s.get("artist",   ""))
+    v_track    = tk.StringVar(value=_s.get("track",    ""))
+    v_label    = tk.StringVar(value=_s.get("label",    ""))
+    v_released = tk.StringVar(value=_s.get("released", ""))
+    v_episode  = tk.StringVar(value=str(_s.get("episode", "")))
+    v_ep_type  = tk.StringVar(value=_s.get("ep_type",  "ep"))
 
-    # ── Auto-preview ─────────────────────────────────────────────────────────
+    # ── Header ────────────────────────────────────────────────────────────────
+    hdr = tk.Frame(root, bg=BG)
+    hdr.pack(fill="x", padx=PAD, pady=(PAD, 6))
+    tk.Label(hdr, text="mediatq.", font=("Alte Haas Grotesk", 20, "bold"),
+             bg=BG, fg=FG).pack(anchor="w")
+    ttk.Separator(root, orient="horizontal").pack(fill="x")
+
+    # ── Form ──────────────────────────────────────────────────────────────────
+    form = tk.Frame(root, bg=BG)
+    form.pack(fill="x", padx=PAD, pady=(14, 6))
+    form.columnconfigure(1, weight=1)
+    form.columnconfigure(4, weight=1)
+
+    def lbl(text, r, c):
+        tk.Label(form, text=text.upper(), font=FONT_LBL, bg=BG, fg=LABEL_FG).grid(
+            row=r, column=c, sticky="w", padx=(0, 10), pady=5)
+
+    def inp(var, r, c, bold=False):
+        f = ("Alte Haas Grotesk", 11, "bold") if bold else FONT
+        tk.Entry(form, textvariable=var, font=f, bg=ENTRY_BG, fg=FG,
+                 insertbackground=FG, relief="flat",
+                 highlightbackground=ENTRY_BORDER, highlightthickness=1).grid(
+            row=r, column=c, sticky="ew", pady=5, ipady=6)
+
+    # col spacer between left and right halves
+    tk.Frame(form, bg=BG, width=40).grid(row=0, column=2, rowspan=3)
+
+    lbl("artist",   0, 0); inp(v_artist,   0, 1)
+    lbl("track",    0, 3); inp(v_track,    0, 4)
+    lbl("label",    1, 0); inp(v_label,    1, 1)
+    lbl("released", 1, 3); inp(v_released, 1, 4)
+
+    # ep / lp row
+    ep_cell = tk.Frame(form, bg=BG)
+    ep_cell.grid(row=2, column=0, columnspan=2, sticky="w", pady=5)
+    for val in ("ep", "lp"):
+        tk.Label(ep_cell, text=val.upper(), font=FONT_LBL, bg=BG, fg=LABEL_FG).pack(side="left")
+        tk.Radiobutton(ep_cell, variable=v_ep_type, value=val,
+                       bg=BG, activebackground=BG, relief="flat",
+                       selectcolor=BG).pack(side="left", padx=(2, 12))
+
+    lbl("mediatq. number", 2, 3); inp(v_episode, 2, 4, bold=True)
+
+    # ── Upload buttons ────────────────────────────────────────────────────────
+    up_bar = tk.Frame(root, bg=BG)
+    up_bar.pack(pady=(10, 14))
+
+    def pick_cover():
+        p = filedialog.askopenfilename(filetypes=[("Images", "*.jpg *.jpeg *.png")])
+        if p: v_cover.set(p)
+    def pick_audio():
+        p = filedialog.askopenfilename(filetypes=[("Audio", "*.mp3 *.wav *.aiff *.flac")])
+        if p: v_audio.set(p)
+
+    pill_button(up_bar, "upload cover", pick_cover, w=180, h=38).pack(side="left", padx=10)
+    pill_button(up_bar, "upload audio", pick_audio, w=180, h=38).pack(side="left", padx=10)
+
+    # ── Preview ───────────────────────────────────────────────────────────────
+    pf = tk.Frame(root, bg=PREV_BG, width=PREV_W, height=PREV_H)
+    pf.pack(pady=(0, 14))
+    pf.pack_propagate(False)
+    preview_label = tk.Label(pf, bg=PREV_BG)
+    preview_label.place(x=0, y=0, width=PREV_W, height=PREV_H)
+
+    # ── Image de démarrage ────────────────────────────────────────────────────
+    _TEMPLATE = str(ASSETS_DIR / "mdtq_youtube_template.jpg")
+    try:
+        from PIL import ImageTk
+        _tpl = Image.open(_TEMPLATE).resize((PREV_W, PREV_H), Image.LANCZOS)
+        _tpl_photo = ImageTk.PhotoImage(_tpl)
+        preview_label.configure(image=_tpl_photo)
+        preview_label.image = _tpl_photo
+    except Exception:
+        pass
+
+    # ── Auto-preview ──────────────────────────────────────────────────────────
     _preview_job = [None]
-
     def _do_preview():
         cover = v_cover.get().strip()
-        if not cover or not os.path.exists(cover):
-            return
+        if not cover or not os.path.exists(cover): return
         try:
             from PIL import ImageTk
             class _A: pass
@@ -553,121 +630,68 @@ def gui_mode():
             a.ep_type  = v_ep_type.get()
             a.released = v_released.get().strip()
             a.episode  = int(v_episode.get().strip() or "1")
-            img = generate_preview(a)
-            photo = ImageTk.PhotoImage(img.resize((480, 270), Image.LANCZOS))
+            img   = generate_preview(a)
+            photo = ImageTk.PhotoImage(img.resize((PREV_W, PREV_H), Image.LANCZOS))
             root.after(0, lambda p=photo: _set_preview(p))
-        except Exception:
-            pass
+        except Exception: pass
 
     def _set_preview(photo):
         preview_label.configure(image=photo)
         preview_label.image = photo
 
     def _schedule_preview(*_):
-        if _preview_job[0]:
-            root.after_cancel(_preview_job[0])
+        if _preview_job[0]: root.after_cancel(_preview_job[0])
         _preview_job[0] = root.after(800, lambda: threading.Thread(target=_do_preview, daemon=True).start())
 
     for _v in (v_cover, v_artist, v_track, v_label, v_released, v_episode, v_ep_type):
         _v.trace_add("write", _schedule_preview)
 
-    label(frame, "cover", 0, 0)
-    entry(frame, v_cover, 1, 0, bold=True)
-    browse_btn(frame, v_cover, 2, 0, [("Images", "*.jpg *.jpeg *.png")])
-
-    label(frame, "audio", 0, 1)
-    entry(frame, v_audio, 1, 1)
-    browse_btn(frame, v_audio, 2, 1, [("Audio", "*.mp3 *.wav *.aiff *.flac")])
-
-    label(frame, "artist", 0, 2)
-    entry(frame, v_artist, 1, 2)
-
-    label(frame, "track", 0, 3)
-    entry(frame, v_track, 1, 3)
-
-    label(frame, "label", 0, 4)
-    entry(frame, v_label, 1, 4)
-
-    label(frame, "released", 0, 5)
-    entry(frame, v_released, 1, 5, width=20)
-
-    label(frame, "type", 0, 6)
-    ep_frame = tk.Frame(frame, bg=BG)
-    ep_frame.grid(row=6, column=1, sticky="w", padx=10, pady=6)
-    for val in ("ep", "lp"):
-        tk.Radiobutton(ep_frame, text=val, variable=v_ep_type, value=val,
-                       font=FONT, bg=BG, fg=FG, selectcolor=BG,
-                       activebackground=BG, activeforeground=FG).pack(side="left", padx=8)
-
-    label(frame, "number", 0, 7)
-    entry(frame, v_episode, 1, 7, width=10, bold=True)
-
-
-    # ── Barre de progression ──────────────────────────────────────────────────
+    # ── Progress bar ──────────────────────────────────────────────────────────
     progress_var = tk.DoubleVar(value=0)
-    progress_bar = ttk.Progressbar(root, variable=progress_var,
-                                   mode='determinate', maximum=100)
-    progress_bar.grid(row=2, column=0, columnspan=2, padx=20, pady=(10, 5), sticky="ew")
+    ttk.Progressbar(root, variable=progress_var, mode="determinate", maximum=100).pack(
+        fill="x", padx=PAD, pady=(0, 6))
 
-    # ── Génération ────────────────────────────────────────────────────────────
-    btn_frame = tk.Frame(root, bg=BG)
-    btn_frame.grid(row=3, column=0, columnspan=2, pady=(0, 20))
-
-    btn_generate = tk.Button(btn_frame, text="  Générer la vidéo  ", font=("Alte Haas Grotesk", 12, "bold"),
-                             bg=BTN_BG, fg=BTN_FG, activebackground=BTN_ACTIVE,
-                             activeforeground=BTN_FG, relief="flat", pady=8)
-    btn_generate.pack(side="left", padx=10)
+    # ── Export button ─────────────────────────────────────────────────────────
+    ex_bar = tk.Frame(root, bg=BG)
+    ex_bar.pack(pady=(0, 16))
 
     def run():
-        cover = v_cover.get().strip()
-        audio = v_audio.get().strip()
-        artist = v_artist.get().strip()
-        track = v_track.get().strip()
-        lbl = v_label.get().strip()
-        ep_type = v_ep_type.get()
+        cover    = v_cover.get().strip()
+        audio    = v_audio.get().strip()
+        artist   = v_artist.get().strip()
+        track    = v_track.get().strip()
+        lbl_val  = v_label.get().strip()
+        ep_type  = v_ep_type.get()
         released = v_released.get().strip()
         try:
             episode = int(v_episode.get().strip())
         except ValueError:
-            messagebox.showerror("Erreur", "Le numéro d'épisode doit être un nombre.")
-            return
+            messagebox.showerror("Erreur", "Le numéro d'épisode doit être un nombre."); return
         def _sanitize(s):
             return "".join(c if c not in r'\/:*?"<>|' else "_" for c in s)
         output = str(Path(__file__).parent / f"{episode:04d}_{_sanitize(artist)}_{_sanitize(track)}.mp4")
-
         if not cover or not os.path.exists(cover):
-            messagebox.showerror("Erreur", f"Pochette introuvable :\n{cover}")
-            return
+            messagebox.showerror("Erreur", f"Pochette introuvable :\n{cover}"); return
         if not audio or not os.path.exists(audio):
-            messagebox.showerror("Erreur", f"Fichier audio introuvable :\n{audio}")
-            return
+            messagebox.showerror("Erreur", f"Fichier audio introuvable :\n{audio}"); return
 
-        class Args:
-            pass
+        class Args: pass
         args = Args()
-        args.cover = cover
-        args.audio = audio
-        args.artist = artist
-        args.track = track
-        args.label = lbl
-        args.ep_type = ep_type
-        args.released = released
-        args.episode = episode
-        args.output = output
-        save_session({"cover": cover, "audio": audio, "artist": artist,
-                      "track": track, "label": lbl, "ep_type": ep_type,
-                      "released": released, "episode": episode})
-        btn_generate.configure(state="disabled", text="  Génération en cours...  ")
+        args.cover = cover; args.audio = audio; args.artist = artist
+        args.track = track; args.label = lbl_val; args.ep_type = ep_type
+        args.released = released; args.episode = episode; args.output = output
+        save_session({"cover": cover, "audio": audio, "artist": artist, "track": track,
+                      "label": lbl_val, "ep_type": ep_type, "released": released, "episode": episode})
+        btn_export.set_state("disabled")
 
         def task():
             try:
                 import proglog
                 class TkLogger(proglog.ProgressBarLogger):
                     def bars_callback(self, bar, attr, value, old_value=None):
-                        if attr == 'index':
-                            total = self.bars[bar].get('total', 1) or 1
-                            pct = int(100 * value / total)
-                            progress_var.set(pct)
+                        if attr == "index":
+                            total = self.bars[bar].get("total", 1) or 1
+                            progress_var.set(int(100 * value / total))
                             root.update_idletasks()
                 progress_var.set(0)
                 generate_video(args, progress_logger=TkLogger())
@@ -676,11 +700,16 @@ def gui_mode():
             except Exception as e:
                 messagebox.showerror("Erreur", str(e))
             finally:
-                btn_generate.configure(state="normal", text="  Générer la vidéo  ")
+                btn_export.set_state("normal")
 
         threading.Thread(target=task, daemon=True).start()
 
-    btn_generate.configure(command=run)
+    btn_export = pill_button(ex_bar, "export video", run, w=180, h=38)
+    btn_export.pack()
+
+    # ── Footer ────────────────────────────────────────────────────────────────
+    ttk.Separator(root, orient="horizontal").pack(fill="x", pady=(8, PAD))
+
     root.mainloop()
 
 # ── Mode interactif ───────────────────────────────────────────────────────────
